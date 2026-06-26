@@ -4,7 +4,7 @@ import { createClient } from "redis";
 
 import type { RedisClientOptions } from "redis";
 
-import { randomInt } from "crypto";
+import { randomInt } from "node:crypto";
 
 import { LRUCache } from "lru-cache";
 export type RedisSessionsOptions = {
@@ -17,8 +17,8 @@ export type RedisSessionsOptions = {
 	cachemax?: number;
 };
 
-type AllowedPrimitive = string | boolean | number | null
-type AllowedType = AllowedPrimitive | AllowedType[] | { [key: string]: AllowedType }
+type AllowedPrimitive = string | boolean | number | null;
+type AllowedType = AllowedPrimitive | AllowedType[] | { [key: string]: AllowedType };
 
 type EvaluatedOption = {
 	app: string;
@@ -766,8 +766,7 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 		}
 		const resp = await mc.exec();
 		const o = [];
-		for (let i = 0; i < resp.length; i++) {
-			const e = resp[i];
+		for (const [i, e] of resp.entries()) {
 			if (Array.isArray(e)) {
 				const result: (string|null)[] = [];
 				for (const reply of e) {

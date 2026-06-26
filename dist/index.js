@@ -5,7 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const lodash_1 = __importDefault(require("lodash"));
 const redis_1 = require("redis");
-const crypto_1 = require("crypto");
+const node_crypto_1 = require("node:crypto");
 const lru_cache_1 = require("lru-cache");
 /** RedisSessions
 
@@ -589,7 +589,7 @@ class RedisSessions {
         // Note we don't use Z as a valid character here
         const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYabcdefghijklmnopqrstuvwxyz0123456789";
         for (let i = 0; i < 55; i++) {
-            t += possible.charAt((0, crypto_1.randomInt)(0, possible.length));
+            t += possible.charAt((0, node_crypto_1.randomInt)(0, possible.length));
         }
         // add the current time in ms to the very end seperated by a Z
         return t + "Z" + Date.now().toString(36);
@@ -670,8 +670,7 @@ class RedisSessions {
         }
         const resp = await mc.exec();
         const o = [];
-        for (let i = 0; i < resp.length; i++) {
-            const e = resp[i];
+        for (const [i, e] of resp.entries()) {
             if (Array.isArray(e)) {
                 const result = [];
                 for (const reply of e) {
