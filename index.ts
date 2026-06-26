@@ -45,6 +45,7 @@ type SetData<T extends Record<string, AllowedType>> = {
 
 export type Session<T extends Record<string, AllowedType> = Record<string, AllowedType>> = {
 	id: string;
+	token: string;
 	r: number;
 	w: number;
 	ttl: number;
@@ -289,7 +290,7 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 			"ip",
 			"no_resave"
 		]);
-		const o = this._prepareSession(resp);
+		const o = this._prepareSession(resp, options.token);
 		if (o === null) {
 			return null;
 		}
@@ -714,7 +715,7 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 	}
 
 	// takes redis response and builds the corresponding session object
-	private _prepareSession(session: (string|null)[]) {
+	private _prepareSession(session: (string|null)[], token: string) {
 		if (session[0] === null) {
 			return null;
 		}
@@ -722,6 +723,7 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 		// Create the return object
 		const o: Session<SessionData> = {
 			id: session[0].toString(),
+			token: token,
 			r: Number(session[1]),
 			w: Number(session[2]),
 			ttl: Number(session[3]),
@@ -764,7 +766,8 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 		}
 		const resp = await mc.exec();
 		const o = [];
-		for (const e of resp) {
+		for (let i = 0; i < resp.length; i++) {
+			const e = resp[i];
 			if (Array.isArray(e)) {
 				const result: (string|null)[] = [];
 				for (const reply of e) {
@@ -776,7 +779,7 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 						throw new Error("Critical Error in return Session");
 					}
 				}
-				const session = this._prepareSession(result);
+				const session = this._prepareSession(result, sessions[i]);
 				if (session) {
 					o.push(session);
 				}
