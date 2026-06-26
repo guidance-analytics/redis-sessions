@@ -16,6 +16,9 @@ export type RedisSessionsOptions = {
 	cachemax?: number;
 };
 
+type AllowedPrimitive = string | boolean | number | null
+type AllowedType = AllowedPrimitive | AllowedType[] | { [key: string]: AllowedType }
+
 type EvaluatedOption = {
 	app: string;
 	token?: string;
@@ -23,7 +26,7 @@ type EvaluatedOption = {
 	ip?: string;
 	ttl?: number;
 	no_resave?: boolean;
-	d?: Record<string, string|number|boolean|null>;
+	d?: Record<string, AllowedType>;
 	deltaTime?: number;
 	noupdate?: boolean;
 	nochache?: boolean;
@@ -35,11 +38,11 @@ type OptionalPropertyOf<T extends object> = Exclude<{
 		: K
 }[keyof T], undefined>;
 
-type SetData<T extends Record<string, string|boolean|number>> = {
+type SetData<T extends Record<string, AllowedType>> = {
 	[k in keyof T]?: k extends OptionalPropertyOf<T> ? T[k]|null : T[k];
 };
 
-export type Session<T extends Record<string, string|boolean|number> = Record<string, string|boolean|number>> = {
+export type Session<T extends Record<string, AllowedType> = Record<string, AllowedType>> = {
 	id: string;
 	r: number;
 	w: number;
@@ -78,7 +81,7 @@ export type Session<T extends Record<string, string|boolean|number> = Record<str
  *
  * @param port
  */
-class RedisSessions <SessionData extends Record<string, string|boolean|number>> {
+class RedisSessions <SessionData extends Record<string, AllowedType>> {
 	// redis name space
 	private redisns: string;
 	// to check if the cache is enabled
@@ -534,7 +537,7 @@ class RedisSessions <SessionData extends Record<string, string|boolean|number>> 
 		this._validate(options as {
 			app: string;
 			token: string;
-			d: Record<string, string|boolean|number|null>;
+			d: Record<string, AllowedType>;
 			no_resave?: boolean;
 		}, [
 			"app",
@@ -851,11 +854,11 @@ class RedisSessions <SessionData extends Record<string, string|boolean|number>> 
 						throw this._handleError("invalidValue", { msg: "d must containt at least one key." });
 					}
 					// Check if every key is either a boolean, string or a number
-					for (const e of Object.keys(o.d)) {
-						if (!_.isString(o.d[e]) && !_.isNumber(o.d[e]) && !_.isBoolean(o.d[e]) && !_.isNull(o.d[e])) {
-							throw this._handleError("invalidValue", { msg: `d.${e} has a forbidden type. Only strings, numbers, boolean and null are allowed.` });
-						}
-					}
+					// for (const e of Object.keys(o.d)) {
+					// 	if (!_.isString(o.d[e]) && !_.isNumber(o.d[e]) && !_.isBoolean(o.d[e]) && !_.isNull(o.d[e])) {
+					// 		throw this._handleError("invalidValue", { msg: `d.${e} has a forbidden type. Only strings, numbers, boolean and null are allowed.` });
+					// 	}
+					// }
 					break;
 				}
 				default: {
