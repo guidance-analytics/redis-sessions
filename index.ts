@@ -1,9 +1,10 @@
-
 import _ from "lodash";
 
 import { createClient } from "redis";
 
 import type { RedisClientOptions } from "redis";
+
+import { randomInt } from "crypto";
 
 import { LRUCache } from "lru-cache";
 export type RedisSessionsOptions = {
@@ -680,7 +681,7 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 		// Note we don't use Z as a valid character here
 		const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYabcdefghijklmnopqrstuvwxyz0123456789";
 		for (let i = 0; i < 55; i++) {
-			t += possible.charAt(Math.floor(Math.random() * possible.length));
+			t += possible.charAt(randomInt(0, possible.length));
 		}
 
 		// add the current time in ms to the very end seperated by a Z
