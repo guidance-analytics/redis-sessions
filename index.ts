@@ -489,11 +489,15 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 
 		const response = await mc.exec();
 		// get the amount of deleted sessions
+		// Each token queues zRem, sRem, zRem, del — plus a publish when the cache is enabled. The `del`
+		// reply is the 4th of each block; the previous fixed stride of 4 read the wrong replies whenever
+		// the cache added a 5th command per token
+		const commandsPerToken = this.isCache ? 5 : 4;
+		const delReplyOffset = 3;
 
 		let total = 0;
-		const ref = response.slice(3);
-		for (let k = 0; k < ref.length; k += 4) {
-			const e = ref[k];
+		for (let k = 0; k < resp.length; k++) {
+			const e = response[(k * commandsPerToken) + delReplyOffset];
 			if (typeof e === "number") {
 				total += e;
 			} else {
