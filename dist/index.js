@@ -179,15 +179,12 @@ class RedisSessions {
             la: this._now(),
             ttl: options.ttl ?? 7200
         };
-        if (!options.d.___duMmYkEy) {
-            // Remove null values
-            const nullkeys = [];
-            for (const e of Object.keys(options.d)) {
-                if (options.d[e] === null) {
-                    nullkeys.push(e);
-                }
-            }
-            options.d = lodash_1.default.omit(options.d, nullkeys);
+        // Test for the sentinel by key, not by value: it is `null`, so a truthiness check only worked back
+        // when nulls were stripped below
+        if (!("___duMmYkEy" in options.d)) {
+            // `null` means "delete this key" in `set`, but on a fresh session there is nothing to delete, so
+            // dropping the key here just silently returned a session whose `d` did not match what was passed.
+            // Store it, so the persisted shape matches the caller's declared type
             if (lodash_1.default.keys(options.d).length > 0) {
                 thesession.d = JSON.stringify(options.d);
             }
@@ -473,6 +470,10 @@ class RedisSessions {
      * `token` must be [a-zA-Z0-9] and 64 chars long
      * `d` must be an object with keys whose values only consist of strings, numbers, boolean and null.
      * `no_resave` *optional* Default: false. Boolean if true ttl will not refresh
+
+     NOTE: a top-level `null` value DELETES that key rather than storing null (documented behaviour).
+     This is shallow only — a nested null such as `{ meta: { npi: null } }` is stored as-is. Callers whose
+     schema distinguishes "null" from "absent" must account for that.
     */
     async set(options) {
         if (!this.connected) {
