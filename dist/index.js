@@ -7,6 +7,13 @@ const lodash_1 = __importDefault(require("lodash"));
 const redis_1 = require("redis");
 const node_crypto_1 = require("node:crypto");
 const lru_cache_1 = require("lru-cache");
+/**
+ * Token length in characters. Must match the `token` validation regex.
+ * Previously 55 random characters plus a `Z` separator and a base36 millisecond timestamp. That leaked each
+ * session's creation time, and would have broken authentication outright on 2059-05-25, when
+ * `Date.now().toString(36)` grows to 9 characters and pushes tokens past the 64 the validator accepts.
+ */
+const TOKEN_LENGTH = 64;
 /** How many times `set` retries a write that lost a WATCH race before giving up */
 const SET_MAX_ATTEMPTS = 5;
 /**
@@ -636,13 +643,11 @@ class RedisSessions {
     };
     _createToken = () => {
         let t = "";
-        // Note we don't use Z as a valid character here
-        const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYabcdefghijklmnopqrstuvwxyz0123456789";
-        for (let i = 0; i < 55; i++) {
+        const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        for (let i = 0; i < TOKEN_LENGTH; i++) {
             t += possible.charAt((0, node_crypto_1.randomInt)(0, possible.length));
         }
-        // add the current time in ms to the very end seperated by a Z
-        return t + "Z" + Date.now().toString(36);
+        return t;
     };
     // returns new Error
     _handleError(err, data) {
