@@ -7,6 +7,8 @@ const lodash_1 = __importDefault(require("lodash"));
 const redis_1 = require("redis");
 const node_crypto_1 = require("node:crypto");
 const lru_cache_1 = require("lru-cache");
+/** How many times `set` retries a write that lost a WATCH race before giving up */
+const SET_MAX_ATTEMPTS = 5;
 /** RedisSessions
 
  To create a new instance use:
@@ -473,62 +475,88 @@ class RedisSessions {
             "d",
             "no_resave"
         ]);
-        const getOptions = {
-            app: options.app,
-            d: options.d,
-            token: options.token,
-            _noupdate: true,
-            _nocache: true
-        };
-        // Get the session
-        let resp = await this.get(getOptions);
-        if (!resp) {
-            return null;
-        }
-        // Cleanup `d`
-        const nullkeys = [];
-        for (const e of Object.keys(options.d)) {
-            if (options.d[e] === null) {
-                nullkeys.push(e);
-            }
-        }
-        // OK ready to set some data
-        if (resp.d) {
-            resp.d = lodash_1.default.extend(lodash_1.default.omit(resp.d, nullkeys), lodash_1.default.omit(options.d, nullkeys));
-        }
-        else {
-            resp.d = lodash_1.default.omit(options.d, nullkeys);
-        }
-        // We now have a cleaned version of resp.d ready to save back to Redis.
-        // If resp.d contains no keys we want to delete the `d` key within the hash though.
         const thekey = `${this.redisns}${options.app}:${options.token}`;
-        const mc = this._createMultiStatement(options.app, options.token, resp.id, resp.ttl, resp.no_resave);
-        mc.hIncrBy(thekey, "w", 1);
-        // Only update the `la` (last access) value if more than 1 second idle
-        if (resp.idle > 1) {
-            mc.hSet(thekey, "la", this._now());
+        if (this.isCache && !this.subscribed) {
+            this.subscribed = await this.toSubscribe;
         }
-        if (lodash_1.default.keys(resp.d).length > 0) {
-            mc.hSet(thekey, "d", JSON.stringify(resp.d));
-        }
-        else {
-            mc.hDel(thekey, "d");
-            resp = lodash_1.default.omit(resp, "d");
-        }
-        if (this.isCache) {
-            if (!this.subscribed) {
-                this.subscribed = await this.toSubscribe;
+        // `d` is stored as a single serialized blob, so read-merge-write must be atomic or a concurrent
+        // `set` on the same token silently loses the loser's changes. WATCH the hash and retry on conflict.
+        // An isolated connection is required: WATCH is connection scoped, and EXEC clears every watch on it
+        for (let attempt = 0; attempt < SET_MAX_ATTEMPTS; attempt++) {
+            const outcome = await this.redis.executeIsolated(async (isolated) => {
+                await isolated.watch(thekey);
+                const raw = await isolated.hmGet(thekey, [
+                    "id",
+                    "r",
+                    "w",
+                    "ttl",
+                    "d",
+                    "la",
+                    "ip",
+                    "no_resave"
+                ]);
+                let resp = this._prepareSession(raw, options.token);
+                if (!resp) {
+                    await isolated.unwatch();
+                    return { retry: false, value: null };
+                }
+                // Cleanup `d`
+                const nullkeys = [];
+                for (const e of Object.keys(options.d)) {
+                    if (options.d[e] === null) {
+                        nullkeys.push(e);
+                    }
+                }
+                // OK ready to set some data
+                if (resp.d) {
+                    resp.d = lodash_1.default.extend(lodash_1.default.omit(resp.d, nullkeys), lodash_1.default.omit(options.d, nullkeys));
+                }
+                else {
+                    resp.d = lodash_1.default.omit(options.d, nullkeys);
+                }
+                // We now have a cleaned version of resp.d ready to save back to Redis.
+                // If resp.d contains no keys we want to delete the `d` key within the hash though.
+                const mc = this._createMultiStatement(options.app, options.token, resp.id, resp.ttl, resp.no_resave, isolated);
+                mc.hIncrBy(thekey, "w", 1);
+                // Only update the `la` (last access) value if more than 1 second idle
+                if (resp.idle > 1) {
+                    mc.hSet(thekey, "la", this._now());
+                }
+                if (lodash_1.default.keys(resp.d).length > 0) {
+                    mc.hSet(thekey, "d", JSON.stringify(resp.d));
+                }
+                else {
+                    mc.hDel(thekey, "d");
+                    resp = lodash_1.default.omit(resp, "d");
+                }
+                if (this.isCache) {
+                    mc.publish(`${this.redisns}cache`, `${options.app}:${options.token}`);
+                }
+                const wReplyIndex = resp.no_resave ? 4 : 3;
+                let reply;
+                try {
+                    reply = await mc.exec();
+                }
+                catch (error) {
+                    // Another writer touched the session between the WATCH and the EXEC
+                    if (error instanceof redis_1.WatchError) {
+                        return { retry: true, value: null };
+                    }
+                    throw error;
+                }
+                if (typeof reply[wReplyIndex] === "number") {
+                    resp.w = reply[wReplyIndex];
+                }
+                else {
+                    throw new TypeError("Critical Error Set Option");
+                }
+                return { retry: false, value: resp };
+            });
+            if (!outcome.retry) {
+                return outcome.value;
             }
-            mc.publish(`${this.redisns}cache`, `${options.app}:${options.token}`);
         }
-        const reply = await mc.exec();
-        if (typeof reply[3] === "number") {
-            resp.w = reply[3];
-        }
-        else {
-            throw new TypeError("Critical Error Set Option");
-        }
-        return resp;
+        throw new Error(`Could not set session data after ${SET_MAX_ATTEMPTS} attempts due to concurrent writes`);
     }
     /* Session of App
 
@@ -581,9 +609,9 @@ class RedisSessions {
         await this.redis.connect();
         return true;
     }
-    _createMultiStatement = (app, token, id, ttl, no_resave) => {
+    _createMultiStatement = (app, token, id, ttl, no_resave, client) => {
         const now = this._now();
-        const multi = this.redis.multi();
+        const multi = (client ?? this.redis).multi();
         multi.zAdd(`${this.redisns}${app}:_sessions`, { score: now, value: `${token}:${id}` });
         multi.zAdd(`${this.redisns}${app}:_users`, { score: now, value: id });
         multi.zAdd(`${this.redisns}SESSIONS`, { score: now + ttl, value: `${app}:${token}:${id}` });
