@@ -130,6 +130,14 @@ declare class RedisSessions<SessionData extends Record<string, AllowedType>> {
     }>;
     private connect;
     private _createMultiStatement;
+    /**
+     * Split a `token:id` sorted-set member.
+     * `id` allows any UTF-8 and may legitimately contain colons, so only the FIRST separator is
+     * significant — a plain `split(":")` truncated such ids and orphaned their user sets.
+     */
+    private _splitTokenId;
+    /** Split an `app:token:id` sorted-set member; see `_splitTokenId` */
+    private _splitAppTokenId;
     private _createToken;
     private _handleError;
     private _now;

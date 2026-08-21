@@ -355,10 +355,10 @@ class RedisSessions {
         const tokenkeys = [];
         let userkeys = [];
         for (const e of resp) {
-            const thekey = e.split(":");
+            const { token, id } = this._splitTokenId(e);
             globalkeys.push(`${options.app}:${e}`);
-            tokenkeys.push(`${this.redisns}${options.app}:${thekey[0]}`);
-            userkeys.push(thekey[1]);
+            tokenkeys.push(`${this.redisns}${options.app}:${token}`);
+            userkeys.push(id);
         }
         userkeys = lodash_1.default.uniq(userkeys);
         const ussets = [];
@@ -645,6 +645,25 @@ class RedisSessions {
         }
         return multi;
     };
+    /**
+     * Split a `token:id` sorted-set member.
+     * `id` allows any UTF-8 and may legitimately contain colons, so only the FIRST separator is
+     * significant — a plain `split(":")` truncated such ids and orphaned their user sets.
+     */
+    _splitTokenId = (member) => {
+        const sep = member.indexOf(":");
+        return { token: member.slice(0, sep), id: member.slice(sep + 1) };
+    };
+    /** Split an `app:token:id` sorted-set member; see `_splitTokenId` */
+    _splitAppTokenId = (member) => {
+        const first = member.indexOf(":");
+        const second = member.indexOf(":", first + 1);
+        return {
+            app: member.slice(0, first),
+            token: member.slice(first + 1, second),
+            id: member.slice(second + 1)
+        };
+    };
     _createToken = () => {
         let t = "";
         const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -770,7 +789,7 @@ class RedisSessions {
     // Validation regex used by _validate
     VALID = {
         app: /^([\w-]){3,20}$/,
-        id: /^(.*?){1,128}$/,
+        id: /^.{1,128}$/,
         ip: /^.{1,39}$/,
         token: /^([\dA-Za-z]){64}$/
     };
@@ -856,13 +875,7 @@ class RedisSessions {
         const resp = await this.redis.zRangeByScore(`${this.redisns}SESSIONS`, "-inf", this._now());
         if (resp.length > 0) {
             for (const element of resp) {
-                const e = element.split(":");
-                const options = {
-                    app: e[0],
-                    token: e[1],
-                    id: e[2]
-                };
-                await this._kill(options);
+                await this._kill(this._splitAppTokenId(element));
             }
         }
         return;
