@@ -61,6 +61,7 @@ declare class RedisSessions<SessionData extends Record<string, AllowedType>> {
     private redis;
     private sessionCache;
     private wiperInterval;
+    private wiping;
     private redissub;
     private subscribed;
     private toSubscribe;
@@ -138,5 +139,6 @@ declare class RedisSessions<SessionData extends Record<string, AllowedType>> {
     private VALID;
     private _validate;
     private _wipe;
+    private _runWipe;
 }
 export default RedisSessions;

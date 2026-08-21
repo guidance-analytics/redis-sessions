@@ -44,6 +44,8 @@ class RedisSessions {
     sessionCache = null;
     // deletes sessions from redis based on ttl
     wiperInterval = null;
+    // guards against overlapping wipe runs
+    wiping = false;
     // redissub is used to wipe cache on set/kill
     redissub = null;
     // handles async work of connecting to redis
@@ -90,7 +92,13 @@ class RedisSessions {
             if (wipe < 10) {
                 wipe = 10;
             }
-            this.wiperInterval = setInterval(this._wipe, wipe * 1000);
+            // `_wipe` is async: without this catch any rejection (a Redis blip, a failover) becomes an
+            // unhandled rejection, which terminates the process on Node >= 15
+            this.wiperInterval = setInterval(() => {
+                void this._wipe().catch((err) => {
+                    console.error("redis-sessions: session wipe failed", err);
+                });
+            }, wipe * 1000);
         }
     }
     /* Activity
@@ -778,6 +786,19 @@ class RedisSessions {
     //
     // Called by internal housekeeping every `options.wipe` seconds
     _wipe = async () => {
+        // A sweep that outlives its interval must not stack up behind itself
+        if (this.wiping) {
+            return;
+        }
+        this.wiping = true;
+        try {
+            await this._runWipe();
+        }
+        finally {
+            this.wiping = false;
+        }
+    };
+    _runWipe = async () => {
         if (!this.connected) {
             this.connected = await this.toConnect;
         }

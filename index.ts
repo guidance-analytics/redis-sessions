@@ -94,6 +94,8 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 	private sessionCache: LRUCache<string, Session<SessionData>>|null = null;
 	// deletes sessions from redis based on ttl
 	private wiperInterval: ReturnType<typeof setInterval>|null = null;
+	// guards against overlapping wipe runs
+	private wiping = false;
 	// redissub is used to wipe cache on set/kill
 	private redissub: ReturnType<typeof createClient>|null = null;
 	// handles async work of connecting to redis
@@ -145,7 +147,13 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 			if (wipe < 10) {
 				wipe = 10;
 			}
-			this.wiperInterval = setInterval(this._wipe, wipe * 1000);
+			// `_wipe` is async: without this catch any rejection (a Redis blip, a failover) becomes an
+			// unhandled rejection, which terminates the process on Node >= 15
+			this.wiperInterval = setInterval(() => {
+				void this._wipe().catch((err) => {
+					console.error("redis-sessions: session wipe failed", err);
+				});
+			}, wipe * 1000);
 		}
 	}
 
@@ -875,6 +883,20 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 	//
 	// Called by internal housekeeping every `options.wipe` seconds
 	private _wipe = async () => {
+		// A sweep that outlives its interval must not stack up behind itself
+		if (this.wiping) {
+			return;
+		}
+		this.wiping = true;
+
+		try {
+			await this._runWipe();
+		} finally {
+			this.wiping = false;
+		}
+	};
+
+	private _runWipe = async () => {
 		if (!this.connected) {
 			this.connected = await this.toConnect;
 		}
