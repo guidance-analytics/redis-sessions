@@ -12,6 +12,13 @@ type RedisClient = ReturnType<typeof createClient>;
 /** How many times `set` retries a write that lost a WATCH race before giving up */
 const SET_MAX_ATTEMPTS = 5;
 
+/**
+ * Number of commands `_createMultiStatement` queues before a caller appends its own.
+ * Callers that index into the exec() reply must offset by this, plus one more when `no_resave`
+ * is set (it queues an extra hSet). Keep in sync with `_createMultiStatement`.
+ */
+const MULTI_BASE_COMMANDS = 4;
+
 export type RedisSessionsOptions = {
 	port?: number;
 	host?: string;
@@ -251,11 +258,14 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 			thesession.no_resave = 1;
 		}
 		mc.hSet(`${this.redisns}${options.app}:${token}`, thesession);
+		// The expire queued by `_createMultiStatement` is a no-op here because the hash does not exist yet,
+		// so re-apply it once the hSet above has created it. Appended after the session reply so indices hold
+		mc.expire(`${this.redisns}${options.app}:${token}`, options.ttl ?? 7200);
 		// Run the redis statement
 		const resp = await mc.exec();
 		// curently returns number of insertet key value pairs
-		// old:resp[4] !== "OK"
-		if (typeof resp[4] !== "number" || resp[4] < 4) {
+		const sessionReplyIndex = MULTI_BASE_COMMANDS + 1;
+		if (typeof resp[sessionReplyIndex] !== "number" || (resp[sessionReplyIndex] as number) < 4) {
 			throw new Error("Unknown Error");
 		}
 		return { token: token };
@@ -622,7 +632,7 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 					mc.publish(`${this.redisns}cache`, `${options.app}:${options.token}`);
 				}
 
-				const wReplyIndex = resp.no_resave ? 4 : 3;
+				const wReplyIndex = MULTI_BASE_COMMANDS + (resp.no_resave ? 1 : 0);
 
 				let reply;
 				try {
@@ -718,6 +728,10 @@ class RedisSessions <SessionData extends Record<string, AllowedType>> {
 		multi.zAdd(`${this.redisns}${app}:_sessions`, { score: now, value: `${token}:${id}` });
 		multi.zAdd(`${this.redisns}${app}:_users`, { score: now, value: id });
 		multi.zAdd(`${this.redisns}SESSIONS`, { score: now + ttl, value: `${app}:${token}:${id}` });
+		// Let Redis expire the hash itself rather than relying solely on the periodic wiper. Session data
+		// includes credentials-adjacent material, so it should not linger if a sweep is missed or disabled.
+		// `ttl` is already the remaining lifetime for `no_resave` sessions, so this is correct for both modes
+		multi.expire(`${this.redisns}${app}:${token}`, ttl);
 		if (no_resave) {
 			multi.hSet(`${this.redisns}${app}:${token}`, "ttl", ttl);
 		}
